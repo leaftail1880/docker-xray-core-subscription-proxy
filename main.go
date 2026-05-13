@@ -57,11 +57,19 @@ func main() {
 		log.Fatal("No URL* environment variables found.")
 	}
 
+	// List URLs being used
+	log.Println("Subscription/Direct URLs:")
+	for k, v := range urlVars {
+		log.Printf("  %s = %s\n", k, v)
+	}
+
 	refreshGeoAssets()
 
-	config, err := buildConfig(urlVars)
+	// Initial config build: no proxy yet (Xray not started)
+	config, err := buildConfig(urlVars, false)
 	if err != nil {
-		log.Fatalf("Failed to build config: %v", err)
+		log.Printf("ERROR: Could not build config: %v", err)
+		log.Fatalf("Exiting because no proxy outbounds could be configured.")
 	}
 
 	server, err := startXray(config)
@@ -100,14 +108,15 @@ func getURLEnvVars() map[string]string {
 	return vars
 }
 
-// buildConfig creates the final Xray JSON config and returns a parsed core.Config.
-func buildConfig(urlVars map[string]string) (*core.Config, error) {
-	outbounds, err := gatherAllOutbounds(urlVars)
+// buildConfig creates the final Xray JSON config. useProxy indicates whether to
+// try the SOCKS5 proxy for fetching (only after Xray has started).
+func buildConfig(urlVars map[string]string, useProxy bool) (*core.Config, error) {
+	outbounds, err := gatherAllOutbounds(urlVars, useProxy)
 	if err != nil {
 		return nil, err
 	}
 	if len(outbounds) == 0 {
-		return nil, fmt.Errorf("no valid proxy outbounds found")
+		return nil, fmt.Errorf("no valid proxy outbounds found from all sources")
 	}
 
 	// Tag outbounds
@@ -115,7 +124,6 @@ func buildConfig(urlVars map[string]string) (*core.Config, error) {
 		outbounds[i]["tag"] = fmt.Sprintf("proxy%d", i+1)
 	}
 
-	// Build JSON config map
 	configMap := map[string]any{
 		"log": map[string]any{
 			"loglevel": "warning",
@@ -135,9 +143,10 @@ func buildConfig(urlVars map[string]string) (*core.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("json marshal: %w", err)
 	}
-	log.Printf("Final config:\n%s\n", string(jsonBytes))
+	log.Println("========== Generated Xray Config ==========")
+	log.Println(string(jsonBytes))
+	log.Println("===========================================")
 
-	// Let Xray parse the JSON
 	conf, err := core.LoadConfig("json", bytes.NewReader(jsonBytes))
 	if err != nil {
 		return nil, fmt.Errorf("LoadConfig: %w", err)
@@ -190,7 +199,7 @@ func buildRoutingJSON(proxyCount int) map[string]any {
 	}
 }
 
-func gatherAllOutbounds(urlVars map[string]string) ([]map[string]any, error) {
+func gatherAllOutbounds(urlVars map[string]string, useProxy bool) ([]map[string]any, error) {
 	var allOutbounds []map[string]any
 	for name, raw := range urlVars {
 		u, err := url.Parse(raw)
@@ -201,15 +210,16 @@ func gatherAllOutbounds(urlVars map[string]string) ([]map[string]any, error) {
 
 		switch u.Scheme {
 		case "http", "https":
-			nodes, err := fetchSubscription(raw, name)
+			nodes, err := fetchSubscription(raw, name, useProxy)
 			if err != nil {
 				log.Printf("[%s] Subscription error: %v", name, err)
 				continue
 			}
+			log.Printf("[%s] Found %d share links in subscription", name, len(nodes))
 			for _, node := range nodes {
 				out, err := convertNode(node)
 				if err != nil {
-					log.Printf("[%s] Failed to convert node %q: %v", name, node, err)
+					log.Printf("[%s] Failed to convert link %q: %v", name, node, err)
 					continue
 				}
 				allOutbounds = append(allOutbounds, out)
@@ -226,28 +236,54 @@ func gatherAllOutbounds(urlVars map[string]string) ([]map[string]any, error) {
 	return allOutbounds, nil
 }
 
-func fetchSubscription(subURL, name string) ([]string, error) {
+// fetchSubscription downloads a subscription URL, decodes base64 if needed,
+// and returns the list of share links. Caching rules:
+// - Cache the raw content under <cacheDir>/<md5(url)>.txt.
+// - If fetch fails and cache exists, use cache.
+// - If fetch succeeds but yields zero valid links, do NOT update the cache.
+// - Otherwise, overwrite the cache.
+// useProxy determines whether to attempt fetching through the Xray SOCKS5 proxy first (only when Xray is alive).
+func fetchSubscription(subURL, name string, useProxy bool) ([]string, error) {
 	cacheFile := filepath.Join(cacheDir, fmt.Sprintf("%x.txt", md5.Sum([]byte(subURL))))
 
-	raw, err := fetchWithXrayFallback(subURL)
+	raw, err := fetchWithFallback(subURL, useProxy)
 	if err != nil {
-		log.Printf("[%s] Fetch failed, trying cache: %v", name, err)
+		log.Printf("[%s] Fetch failed: %v", name, err)
+		if _, statErr := os.Stat(cacheFile); os.IsNotExist(statErr) {
+			log.Printf("[%s] No cache file exists at %s", name, cacheFile)
+			return nil, fmt.Errorf("fetch error %w, no cache available", err)
+		}
+		log.Printf("[%s] Using cached subscription from %s", name, cacheFile)
 		data, readErr := os.ReadFile(cacheFile)
 		if readErr != nil {
-			return nil, fmt.Errorf("fetch error %w, cache read error %v", err, readErr)
+			return nil, fmt.Errorf("cache read error %v", readErr)
 		}
 		raw = string(data)
 	}
 
-	parsed := parseSubscriptionContent(raw)
-
-	if len(parsed) == 0 {
-		log.Printf("[%s] Fetched content contains no valid links. Keeping old cache if exists.", name)
-		if cachedRaw, err := os.ReadFile(cacheFile); err == nil {
-			parsed = parseSubscriptionContent(string(cachedRaw))
-		}
+	// Show what was fetched (truncated to avoid flooding logs)
+	log.Printf("[%s] Raw subscription content (first 5000 chars):\n%s", name, truncate(raw, 5000))
+	// Try base64 decode
+	decoded, isB64 := tryDecodeB64(raw)
+	if isB64 {
+		log.Printf("[%s] Base64 decoded content (first 5000 chars):\n%s", name, truncate(decoded, 5000))
+	} else {
+		log.Printf("[%s] Content is not base64 or already plain text", name)
 	}
-	if len(parsed) > 0 {
+
+	parsed := parseSubscriptionContent(decoded)
+	if len(parsed) == 0 {
+		log.Printf("[%s] NO valid share links found after parsing.", name)
+		log.Printf("[%s] Trying to use old cache if possible.", name)
+		if cachedRaw, err := os.ReadFile(cacheFile); err == nil {
+			log.Printf("[%s] Old cache exists, reparsing.", name)
+			parsed = parseSubscriptionContent(string(cachedRaw))
+		} else {
+			log.Printf("[%s] No old cache exists either.", name)
+		}
+	} else {
+		log.Printf("[%s] Found %d valid share links, updating cache.", name, len(parsed))
+		// Overwrite cache
 		if err := os.WriteFile(cacheFile, []byte(raw), 0600); err != nil {
 			log.Printf("[%s] Warning: cannot write cache: %v", name, err)
 		}
@@ -255,11 +291,61 @@ func fetchSubscription(subURL, name string) ([]string, error) {
 	return parsed, nil
 }
 
-func fetchWithXrayFallback(rawURL string) (string, error) {
-	if data, err := fetchHTTP(rawURL, true); err == nil {
-		return data, nil
+// tryDecodeB64 attempts to decode base64; returns (decodedStr, true) if it looks like printable text.
+func tryDecodeB64(raw string) (string, bool) {
+	b, err := base64.StdEncoding.DecodeString(raw)
+	if err == nil && isPrintable(string(b)) {
+		return string(b), true
 	}
-	log.Printf("Proxy fetch failed, trying direct...")
+	return raw, false
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen] + "...(truncated)"
+	}
+	return s
+}
+
+func isPrintable(s string) bool {
+	for _, r := range s {
+		if r < 32 || r > 126 {
+			return false
+		}
+	}
+	return true
+}
+
+var shareLinkSchemes = map[string]bool{
+	"vless": true, "vmess": true, "trojan": true, "ss": true, "socks": true,
+}
+
+func isShareLink(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && shareLinkSchemes[u.Scheme]
+}
+
+func parseSubscriptionContent(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	var out []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if isShareLink(line) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// fetchWithFallback tries to fetch the URL. If useProxy is true, it first tries through SOCKS5 proxy.
+func fetchWithFallback(rawURL string, useProxy bool) (string, error) {
+	if useProxy {
+		log.Printf("Trying proxy‑first fetch for %s", rawURL)
+		if data, err := fetchHTTP(rawURL, true); err == nil {
+			return data, nil
+		}
+		log.Printf("Proxy fetch failed, falling back to direct connection")
+	}
 	return fetchHTTP(rawURL, false)
 }
 
@@ -298,48 +384,12 @@ func fetchHTTP(rawURL string, useProxy bool) (string, error) {
 	return string(body), nil
 }
 
-func parseSubscriptionContent(raw string) []string {
-	decoded, err := base64.StdEncoding.DecodeString(raw)
-	if err == nil && isPrintable(string(decoded)) {
-		raw = string(decoded)
-	}
-	lines := strings.Split(raw, "\n")
-	var out []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if isShareLink(line) {
-			out = append(out, line)
-		}
-	}
-	return out
-}
-
-func isPrintable(s string) bool {
-	for _, r := range s {
-		if r < 32 || r > 126 {
-			return false
-		}
-	}
-	return true
-}
-
-var shareLinkSchemes = map[string]bool{
-	"vless": true, "vmess": true, "trojan": true, "ss": true, "socks": true,
-}
-
-func isShareLink(s string) bool {
-	u, err := url.Parse(s)
-	return err == nil && shareLinkSchemes[u.Scheme]
-}
-
-// convertNode uses x2j to parse the link and returns a map representing the outbound.
 func convertNode(node string) (map[string]any, error) {
 	config, err := x2jurl.ParseV2RayURL(node)
 	if err != nil {
 		return nil, fmt.Errorf("x2j parse: %w", err)
 	}
 
-	// Find the proxy outbound (skip "direct" / "blackhole")
 	for _, o := range config.Outbounds {
 		if o.Tag == "direct" || o.Tag == "blackhole" {
 			continue
@@ -347,14 +397,12 @@ func convertNode(node string) (map[string]any, error) {
 		return x2jOutboundToMap(o), nil
 	}
 
-	// Fallback to first outbound
 	if len(config.Outbounds) > 0 {
 		return x2jOutboundToMap(config.Outbounds[0]), nil
 	}
 	return nil, fmt.Errorf("no outbound found in x2j config")
 }
 
-// x2jOutboundToMap converts an x2j outbound to a map suitable for Xray JSON.
 func x2jOutboundToMap(o models.OutboundConfig) map[string]any {
 	out := map[string]any{
 		"protocol": o.Protocol,
@@ -366,7 +414,6 @@ func x2jOutboundToMap(o models.OutboundConfig) map[string]any {
 	if o.StreamSettings != nil {
 		out["streamSettings"] = o.StreamSettings
 	}
-	// If Mux is present, add it
 	if o.Mux != nil {
 		out["mux"] = o.Mux
 	}
@@ -427,7 +474,8 @@ func periodicUpdate(urlVars map[string]string, interval time.Duration, oldServer
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Periodic update triggered...")
-		newConfig, err := buildConfig(urlVars)
+		// Now Xray is running, so allow proxy fetching
+		newConfig, err := buildConfig(urlVars, true)
 		if err != nil {
 			log.Printf("Update failed: %v", err)
 			continue
@@ -464,13 +512,11 @@ func refreshGeoAssets() {
 }
 
 func downloadFileWithProxyFallback(path, downloadURL string) error {
-	data, err := fetchHTTP(downloadURL, true)
+	// For geo assets we can also try proxy if Xray is running, but here we are called before Xray start,
+	// so we'll just use direct fetch. (This is only called at startup, so proxy not yet available.)
+	data, err := fetchHTTP(downloadURL, false)
 	if err != nil {
-		log.Printf("Proxy download failed for %s, trying direct...", path)
-		data, err = fetchHTTP(downloadURL, false)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(data), 0644); err != nil {
