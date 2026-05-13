@@ -21,7 +21,7 @@ FROM alpine:latest
 
 # Required runtime packages (mirroring teddysun/xray essentials)
 RUN apk add --no-cache bash tzdata ca-certificates openssl \
-    && mkdir -p /var/log/xray /usr/share/xray /etc/xray/cache
+    && mkdir -p /var/log/xray /usr/share/xray /usr/share/xray/subscription-cache
 
 ENV TZ=UTC
 
@@ -35,7 +35,7 @@ COPY --from=assets /geoip.dat /usr/share/xray/geoip.dat
 # Copy the Go binary
 COPY --from=builder /xray-docker /usr/local/bin/xray-docker
 
-VOLUME /etc/xray/cache
+VOLUME /usr/share
 EXPOSE 1080 8080
 
 ENTRYPOINT ["xray-docker"]

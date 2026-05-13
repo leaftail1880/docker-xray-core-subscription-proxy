@@ -8,8 +8,8 @@ import (
 )
 
 // CacheDir is the directory where subscription cache files are stored.
-// It is set by SetCacheDir from the config package.
-var CacheDir = "/etc/xray/cache"
+// It is set by SetCacheDir from the main.go
+var CacheDir = ""
 
 // SetCacheDir updates the cache directory.
 func SetCacheDir(dir string) {

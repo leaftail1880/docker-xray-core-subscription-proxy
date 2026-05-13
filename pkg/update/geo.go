@@ -14,7 +14,7 @@ var (
 		"geosite.dat": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat",
 		"geoip.dat":   "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat",
 	}
-	assetDir      = "/usr/share/xray" // default
+	assetDir      = "" // default
 	assetAgeLimit = 24 * time.Hour
 )
 

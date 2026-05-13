@@ -96,9 +96,8 @@ func setRuntimePaths() {
 
 	if inDocker {
 		// Use standard Docker paths
-		utils.SetCacheDir("/etc/xray/cache")
+		utils.SetCacheDir("/usr/share/xray/subscription-cache")
 		update.SetAssetDir("/usr/share/xray")
-		os.Setenv("XRAY_LOCATION_ASSET", "/usr/share/xray")
 	} else {
 		// Use paths relative to the executable
 		execPath, err := os.Executable()
@@ -107,14 +106,13 @@ func setRuntimePaths() {
 		}
 		baseDir := filepath.Dir(execPath)
 		dataDir := filepath.Join(baseDir, "data")
-		assetDir := filepath.Join(dataDir, "xray")
 		cacheDir := filepath.Join(dataDir, "cache")
 
-		os.MkdirAll(assetDir, 0700)
+		os.MkdirAll(dataDir, 0700)
 		os.MkdirAll(cacheDir, 0700)
 
 		utils.SetCacheDir(cacheDir)
-		update.SetAssetDir(assetDir)
-		os.Setenv("XRAY_LOCATION_ASSET", assetDir)
+		update.SetAssetDir(dataDir)
+		os.Setenv("XRAY_LOCATION_ASSET", dataDir)
 	}
 }
