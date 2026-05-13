@@ -18,18 +18,26 @@ import (
 	x2jurl "pira/x2j/url"
 
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/infra/conf/serial"
 )
 
+var cacheDir = "/etc/xray/cache" // default, may be overridden
+
+// SetCacheDir updates the cache directory path.
+func SetCacheDir(dir string) {
+	cacheDir = dir
+	os.MkdirAll(cacheDir, 0700)
+}
+
 const (
-	cacheDir  = "/etc/xray/cache"
 	socksPort = 1080
 	httpPort  = 8080
 )
 
 // Build creates the final Xray config from a map of URL env vars.
-// allowProxy controls whether subscription fetching can use the local proxy.
-func Build(urlVars map[string]string, allowProxy bool) (*core.Config, error) {
-	outbounds, err := gatherAllOutbounds(urlVars, allowProxy)
+// It never uses the proxy (Xray may not be running when this is first called).
+func Build(urlVars map[string]string) (*core.Config, error) {
+	outbounds, err := gatherAllOutbounds(urlVars)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +50,6 @@ func Build(urlVars map[string]string, allowProxy bool) (*core.Config, error) {
 	}
 
 	configMap := map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
 		"inbounds": []any{
 			socksInboundJSON(socksPort),
 			httpInboundJSON(httpPort),
@@ -62,7 +69,7 @@ func Build(urlVars map[string]string, allowProxy bool) (*core.Config, error) {
 	logger.Info.Println(string(jsonBytes))
 	logger.Info.Println("===========================================")
 
-	conf, err := core.LoadConfig("json", bytes.NewReader(jsonBytes))
+	conf, err := serial.LoadJSONConfig(bytes.NewReader(jsonBytes))
 	if err != nil {
 		return nil, fmt.Errorf("xray LoadConfig: %w", err)
 	}
@@ -74,6 +81,7 @@ func socksInboundJSON(port int) map[string]any {
 		"tag":      "socks-in",
 		"protocol": "socks",
 		"port":     port,
+		"listen":   "0.0.0.0",
 		"settings": map[string]any{
 			"auth": "noauth",
 			"udp":  true,
@@ -86,6 +94,7 @@ func httpInboundJSON(port int) map[string]any {
 		"tag":      "http-in",
 		"protocol": "http",
 		"port":     port,
+		"listen":   "0.0.0.0",
 	}
 }
 
@@ -114,8 +123,7 @@ func buildRoutingJSON(count int) map[string]any {
 	}
 }
 
-// gatherAllOutbounds processes all URL env vars and returns a list of outbound maps.
-func gatherAllOutbounds(urlVars map[string]string, allowProxy bool) ([]map[string]any, error) {
+func gatherAllOutbounds(urlVars map[string]string) ([]map[string]any, error) {
 	var outbounds []map[string]any
 	for name, raw := range urlVars {
 		u, err := url.Parse(raw)
@@ -125,7 +133,7 @@ func gatherAllOutbounds(urlVars map[string]string, allowProxy bool) ([]map[strin
 		}
 		switch u.Scheme {
 		case "http", "https":
-			links, err := fetchSubscription(raw, name, allowProxy)
+			links, err := fetchSubscription(raw, name)
 			if err != nil {
 				logger.Error.Printf("[%s] Subscription error: %v", name, err)
 				continue
@@ -151,11 +159,10 @@ func gatherAllOutbounds(urlVars map[string]string, allowProxy bool) ([]map[strin
 	return outbounds, nil
 }
 
-// fetchSubscription downloads a subscription, handles base64, caches it.
-func fetchSubscription(subURL, name string, allowProxy bool) ([]string, error) {
+func fetchSubscription(subURL, name string) ([]string, error) {
 	cacheFile := filepath.Join(cacheDir, fmt.Sprintf("%x.txt", md5.Sum([]byte(subURL))))
 
-	raw, err := fetcher.FetchWithFallback(subURL, allowProxy)
+	raw, err := fetcher.FetchWithFallback(subURL)
 	if err != nil {
 		logger.Error.Printf("[%s] Fetch failed: %v", name, err)
 		if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
@@ -204,8 +211,6 @@ func tryDecodeB64(raw string) (string, bool) {
 	return raw, false
 }
 
-// isPrintable returns true if s contains only printable ASCII characters
-// plus common whitespace (newline, carriage return, tab).
 func isPrintable(s string) bool {
 	for _, r := range s {
 		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
@@ -246,7 +251,6 @@ func isShareLink(s string) bool {
 	return err == nil && shareLinkSchemes[u.Scheme]
 }
 
-// convertNode parses a single share link using x2j and returns an outbound map.
 func convertNode(node string) (map[string]any, error) {
 	conf, err := x2jurl.ParseV2RayURL(node)
 	if err != nil {

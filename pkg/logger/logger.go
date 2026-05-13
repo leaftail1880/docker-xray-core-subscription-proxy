@@ -6,21 +6,24 @@ import (
 )
 
 var (
-	Info  = log.New(os.Stdout, colorGreen("[INFO] "), log.Ldate|log.Ltime|log.Lshortfile)
-	Warn  = log.New(os.Stdout, colorYellow("[WARN] "), log.Ldate|log.Ltime|log.Lshortfile)
-	Error = log.New(os.Stderr, colorRed("[ERROR] "), log.Ldate|log.Ltime|log.Lshortfile)
-	Debug = log.New(os.Stdout, colorCyan("[DEBUG] "), log.Ldate|log.Ltime|log.Lshortfile)
+	Info  *log.Logger
+	Warn  *log.Logger
+	Error *log.Logger
+	Debug *log.Logger
 )
 
 const (
 	reset  = "\033[0m"
-	red    = "\033[31m"
-	green  = "\033[32m"
-	yellow = "\033[33m"
-	cyan   = "\033[36m"
+	Red    = "\033[31m"
+	Green  = "\033[32m"
+	Yellow = "\033[33m"
+	Cyan   = "\033[36m"
 )
 
-func colorRed(s string) string    { return red + s + reset }
-func colorGreen(s string) string  { return green + s + reset }
-func colorYellow(s string) string { return yellow + s + reset }
-func colorCyan(s string) string   { return cyan + s + reset }
+func init() {
+	flags := log.Ldate | log.Ltime | log.Lshortfile
+	Info = log.New(os.Stdout, Green+"[INFO] "+reset, flags)
+	Warn = log.New(os.Stdout, Yellow+"[WARN] "+reset, flags)
+	Error = log.New(os.Stderr, Red+"[ERROR] "+reset, flags)
+	Debug = log.New(os.Stdout, Cyan+"[DEBUG] "+reset, flags)
+}

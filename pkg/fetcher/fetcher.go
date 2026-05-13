@@ -53,11 +53,11 @@ func FetchHTTP(rawURL string, useProxy bool) (string, error) {
 	return string(body), nil
 }
 
-// FetchWithFallback tries proxy first if allowProxy=true AND XrayRunning is true,
-// otherwise falls back to a direct connection.
-func FetchWithFallback(rawURL string, allowProxy bool) (string, error) {
-	if allowProxy && XrayRunning.Load() {
-		logger.Debug.Printf("Trying proxy‑first fetch for %s", rawURL)
+// FetchWithFallback tries to fetch the URL. It uses the SOCKS5 proxy only if
+// XrayRunning is true; otherwise it fetches directly.
+func FetchWithFallback(rawURL string) (string, error) {
+	if XrayRunning.Load() {
+		logger.Debug.Printf("Trying proxy-first fetch for %s", rawURL)
 		data, err := FetchHTTP(rawURL, true)
 		if err == nil {
 			return data, nil

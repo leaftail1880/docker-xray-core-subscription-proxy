@@ -23,9 +23,15 @@ var (
 		"geosite.dat": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat",
 		"geoip.dat":   "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat",
 	}
-	assetDir      = "/usr/share/xray"
+	assetDir      = "/usr/share/xray" // default
 	assetAgeLimit = 24 * time.Hour
 )
+
+// SetAssetDir changes the directory where geo files are stored.
+func SetAssetDir(dir string) {
+	assetDir = dir
+	os.MkdirAll(assetDir, 0700)
+}
 
 // SubscribeLoop periodically rebuilds config and restarts Xray.
 func SubscribeLoop(urlVars map[string]string, interval time.Duration, currentServer **core.Instance, mu *sync.Mutex) {
@@ -33,7 +39,7 @@ func SubscribeLoop(urlVars map[string]string, interval time.Duration, currentSer
 	defer ticker.Stop()
 	for range ticker.C {
 		logger.Info.Println("Subscription update triggered...")
-		newConfig, err := config.Build(urlVars, true) // allow proxy now
+		newConfig, err := config.Build(urlVars) // no proxy param needed, flag is checked internally
 		if err != nil {
 			logger.Error.Printf("Update failed: %v", err)
 			continue
@@ -42,7 +48,6 @@ func SubscribeLoop(urlVars map[string]string, interval time.Duration, currentSer
 		newSrv, err := xray.Restart(*currentServer, newConfig)
 		if err != nil {
 			logger.Error.Printf("Failed to restart Xray: %v", err)
-			// Try to start old config again? Not safe, we'll exit.
 			logger.Error.Fatal("Cannot recover from restart failure, exiting.")
 		}
 		*currentServer = newSrv
@@ -52,7 +57,9 @@ func SubscribeLoop(urlVars map[string]string, interval time.Duration, currentSer
 }
 
 // RefreshGeoAssets downloads fresh geo data files if they are missing or older than 24h.
-func RefreshGeoAssets(allowProxy bool) {
+// Returns true if any file was actually updated.
+func RefreshGeoAssets() bool {
+	updated := false
 	for name, url := range geoFiles {
 		path := filepath.Join(assetDir, name)
 		info, err := os.Stat(path)
@@ -62,23 +69,33 @@ func RefreshGeoAssets(allowProxy bool) {
 		}
 		if needsDownload {
 			logger.Info.Printf("Updating geo asset %s …", name)
-			if err := downloadGeoFile(path, url, allowProxy); err != nil {
-				logger.Error.Printf("Could not update %s: %v", name, err)
+			if downloadGeoFile(path, url) {
+				updated = true
+			} else {
+				logger.Error.Printf("Could not update %s", name)
 			}
 		}
 	}
+	return updated
 }
 
-func downloadGeoFile(path, url string, allowProxy bool) error {
-	data, err := fetcher.FetchWithFallback(url, allowProxy)
+// downloadGeoFile downloads the file and returns true if successful (written).
+func downloadGeoFile(path, url string) bool {
+	data, err := fetcher.FetchWithFallback(url)
 	if err != nil {
-		return err
+		logger.Error.Printf("Download failed for %s: %v", path, err)
+		return false
 	}
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(data), 0644); err != nil {
-		return err
+		logger.Error.Printf("Write failed for %s: %v", path, err)
+		return false
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		logger.Error.Printf("Rename failed for %s: %v", path, err)
+		return false
+	}
+	return true
 }
 
 // ParseCustomDuration handles strings like "30m", "1.5h", "2d".
