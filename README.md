@@ -1,27 +1,21 @@
-# 🚀 xray-docker – Zero‑Config Xray Proxy with Auto‑Subscription
+# 🚀 XRay Docker – Zero‑Config proxy with subscription support
 
 [![License](https://img.shields.io/github/license/leaftail1880/docker-xray-core-subscription-proxy?style=flat-square)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/leaftail1880/docker-xray-core-subscription-proxy?style=flat-square)](go.mod)
 
-**xray-docker** automatically turns your proxy subscriptions into a running VPN without any config file. Just set your URLs and let it handle updates, health checks, and failover. Perfect as proxy for other containers.
-
----
+**xray-docker** automatically turns your proxy subscriptions urls into a running VPN without any config file. Just set your URLs and let it handle updates, health checks, and failover. Perfect as proxy for other containers.
 
 ## ✨ Features
 
-| Feature                              | Description                                                                                                   |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| 📡 **Subscription auto‑update**      | Fetches your proxy lists every few hours (default 5h), automatically rebuilds Xray config and restarts proxy. |
-| 🌍 **Geo‑asset refresh**             | Downloads fresh `geoip.dat` / `geosite.dat` once a day for accurate routing.                                  |
-| 🔀 **Configurable load balancing**   | Random, round‑robin, least‑ping, or least‑load – choose with a single env var.                                |
-| 🛡️ **Fallback to direct**            | If all proxies go down, traffic still flows through your local internet (no blackhole).                       |
-| 💾 **Subscription caching**          | When the subscription server is unreachable, the last cached list is used (no downtime).                      |
-| 🧩 **Supports all common protocols** | VMess, VLESS, Trojan, Shadowsocks, SOCKS – everything Xray supports.                                          |
-| 🔄 **Proxy‑aware fetching**          | After Xray starts, subscription fetches go through the existing proxy.                                        |
+- 📡 **Subscription auto‑update** Fetches your proxy lists every few hours (default 5h), automatically rebuilds Xray config and restarts proxy.
+- 🌍 **Geo‑asset refresh** Downloads fresh `geoip.dat` / `geosite.dat` once a day for accurate routing.
+- 🔀 **Configurable load balancing** Random, round‑robin, least‑ping, or least‑load – choose with a single env var.
+- 🛡️ **Fallback to direct** If all proxies go down, traffic still flows through your local internet (no blackhole).
+- 💾 **Subscription caching** When the subscription server is unreachable, the last cached list is used (no downtime).
+- 🧩 **Supports all common protocols** VMess, VLESS, Trojan, Shadowsocks, SOCKS – everything Xray supports.
+- 🔄 **Proxy‑aware fetching** After Xray starts, subscription fetches go through the existing proxy.
 
----
-
-## Quick Start
+## 🚀 Quick Start
 
 ### Minimal example – internal proxy for other containers
 
