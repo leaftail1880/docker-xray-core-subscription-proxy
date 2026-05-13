@@ -4,10 +4,8 @@ FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
-COPY go.mod go.sum ./
+COPY . .
 RUN go mod download
-
-COPY main.go .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /xray-balancer .
 
 # ---- Stage 2: Download Xray geo data files ----
