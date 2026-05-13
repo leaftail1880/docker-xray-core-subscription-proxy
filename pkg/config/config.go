@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"xray-balancer/pkg/fetcher"
 	"xray-balancer/pkg/logger"
@@ -49,16 +50,50 @@ func Build(urlVars map[string]string) (*core.Config, error) {
 		outbounds[i]["tag"] = fmt.Sprintf("proxy%d", i+1)
 	}
 
+	// Append a direct (freedom) outbound as a fallback
+	directOutbound := map[string]any{
+		"protocol": "freedom",
+		"tag":      "direct",
+	}
+	outbounds = append(outbounds, directOutbound)
+
+	// Build selector tags for the balancer (exclude the direct outbound)
+	selectorTags := make([]string, len(outbounds)-1)
+	for i := 0; i < len(outbounds)-1; i++ {
+		selectorTags[i] = fmt.Sprintf("proxy%d", i+1)
+	}
+
+	// Determine balancer strategy from environment
+	strategy := strings.ToLower(os.Getenv("XRAY_BALANCER_STRATEGY"))
+	if strategy == "" {
+		strategy = "leastPing"
+	}
+	// Validate strategy
+	validStrategies := map[string]bool{
+		"random": true, "roundRobin": true, "leastPing": true, "leastLoad": true,
+	}
+	if !validStrategies[strategy] {
+		logger.Warn.Printf("Invalid balancer strategy %q, falling back to leastPing", strategy)
+		strategy = "leastPing"
+	}
+	logger.Info.Printf("Using balancer strategy: %s", strategy)
+
+	// Build routing, balancer, and optional observatory
+	routing, observatory := buildRoutingAndObservatory(selectorTags, strategy)
+
 	configMap := map[string]any{
 		"inbounds": []any{
 			socksInboundJSON(socksPort),
 			httpInboundJSON(httpPort),
 		},
 		"outbounds": outbounds,
-		"routing":   buildRoutingJSON(len(outbounds)),
+		"routing":   routing,
 		"dns": map[string]any{
 			"servers": []string{"1.1.1.1", "8.8.8.8"},
 		},
+	}
+	if observatory != nil {
+		configMap["observatory"] = observatory
 	}
 
 	jsonBytes, err := json.MarshalIndent(configMap, "", "  ")
@@ -98,12 +133,19 @@ func httpInboundJSON(port int) map[string]any {
 	}
 }
 
-func buildRoutingJSON(count int) map[string]any {
-	selector := make([]string, count)
-	for i := 0; i < count; i++ {
-		selector[i] = fmt.Sprintf("proxy%d", i+1)
+// buildRoutingAndObservatory returns the routing object and an optional observatory object
+// based on the selected balancer strategy.
+func buildRoutingAndObservatory(selector []string, strategy string) (map[string]any, map[string]any) {
+	balancer := map[string]any{
+		"tag":      "balancer",
+		"selector": selector,
+		"strategy": map[string]any{
+			"type": strategy,
+		},
+		"fallbackTag": "direct", // use direct outbound if all selected are down
 	}
-	return map[string]any{
+
+	routing := map[string]any{
 		"domainStrategy": "IPIfNonMatch",
 		"rules": []map[string]any{
 			{
@@ -111,16 +153,30 @@ func buildRoutingJSON(count int) map[string]any {
 				"balancerTag": "balancer",
 			},
 		},
-		"balancers": []map[string]any{
-			{
-				"tag":      "balancer",
-				"selector": selector,
-				"strategy": map[string]any{
-					"type": "random",
-				},
-			},
-		},
+		"balancers": []map[string]any{balancer},
 	}
+
+	// For strategies that rely on health data, add an observatory
+	var observatory map[string]any
+	if strategy == "leastPing" || strategy == "leastLoad" {
+		intervalStr := os.Getenv("XRAY_OBSERVATORY_INTERVAL")
+		if intervalStr == "" {
+			intervalStr = "5m"
+		}
+		interval, err := time.ParseDuration(intervalStr)
+		if err != nil {
+			logger.Error.Printf("Invalid XRAY_OBSERVATORY_INTERVAL %q, using 5m", intervalStr)
+			interval = 5 * time.Minute
+		}
+		observatory = map[string]any{
+			"subjectSelector":   selector,
+			"probeInterval":     interval.String(),
+			"enableConcurrency": false,
+		}
+		logger.Info.Printf("Observatory enabled with probe interval %v", interval)
+	}
+
+	return routing, observatory
 }
 
 func gatherAllOutbounds(urlVars map[string]string) ([]map[string]any, error) {
