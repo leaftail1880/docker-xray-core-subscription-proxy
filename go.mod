@@ -1,4 +1,4 @@
-module xray-balancer
+module xray-docker
 
 go 1.26
 

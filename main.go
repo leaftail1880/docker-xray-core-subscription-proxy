@@ -6,18 +6,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
-	"xray-balancer/pkg/config"
-	"xray-balancer/pkg/fetcher"
-	"xray-balancer/pkg/logger"
-	"xray-balancer/pkg/updater"
-	"xray-balancer/pkg/xray"
-
-	"github.com/xtls/xray-core/core"
-	_ "github.com/xtls/xray-core/main/distro/all"
+	updateInterval "xray-docker/pkg/interval"
+	"xray-docker/pkg/logger"
+	"xray-docker/pkg/update"
+	"xray-docker/pkg/utils"
+	"xray-docker/pkg/xray"
 )
 
 func main() {
@@ -37,7 +32,7 @@ func main() {
 	}
 
 	// Build initial config (Xray not running yet → no proxy used)
-	coreConfig, err := config.Build(urlVars)
+	coreConfig, err := xray.BuildConfig(urlVars)
 	if err != nil {
 		logger.Error.Printf("Could not build config: %v", err)
 		logger.Error.Fatal("Exiting because no proxy outbounds could be configured.")
@@ -49,25 +44,21 @@ func main() {
 		logger.Error.Fatalf("Failed to start Xray: %v", err)
 	}
 	logger.Info.Println("Xray started successfully.")
-	fetcher.XrayRunning.Store(true) // enable proxy for future fetches
+	utils.XrayRunning.Store(true) // enable proxy for future fetches
 
-	// Set default update interval if not specified
+	// Start combined update loop (subscription + geo) with change detection
 	intervalStr := os.Getenv("SUBSCRIPTION_UPDATE_INTERVAL")
 	if intervalStr == "" {
 		intervalStr = "5h"
 		logger.Info.Println("SUBSCRIPTION_UPDATE_INTERVAL not set – defaulting to 5h")
 	}
-	interval, err := updater.ParseCustomDuration(intervalStr)
+	interval, err := utils.ParseCustomDuration(intervalStr)
 	if err != nil {
 		logger.Error.Printf("Invalid SUBSCRIPTION_UPDATE_INTERVAL %q: %v, will not auto-update.", intervalStr, err)
 	} else {
 		logger.Info.Printf("Subscription update interval: %v", interval)
-		var mu sync.Mutex
-		go updater.SubscribeLoop(urlVars, interval, &server, &mu)
+		go updateInterval.StartUpdateLoop(urlVars, interval, &server)
 	}
-
-	// Start geo refresh loop (non‑blocking)
-	go geoRefreshLoop(&server, urlVars)
 
 	// Wait for shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -92,45 +83,6 @@ func getURLEnvVars() map[string]string {
 	return vars
 }
 
-func geoRefreshLoop(serverPtr **core.Instance, urlVars map[string]string) {
-	// Immediate first refresh after startup (no blocking)
-	if updater.RefreshGeoAssets() {
-		logger.Info.Println("Geo assets updated – restarting Xray to apply")
-		newConfig, err := config.Build(urlVars)
-		if err != nil {
-			logger.Error.Printf("Failed to rebuild config for geo update: %v", err)
-			return
-		}
-		newSrv, err := xray.Restart(*serverPtr, newConfig)
-		if err != nil {
-			logger.Error.Printf("Failed to restart Xray after geo update: %v", err)
-			// keep running with old server (still open)
-			return
-		}
-		*serverPtr = newSrv
-	}
-
-	// Then run periodically every 24 hours
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
-	for range ticker.C {
-		if updater.RefreshGeoAssets() {
-			logger.Info.Println("Geo assets updated – restarting Xray")
-			newConfig, err := config.Build(urlVars)
-			if err != nil {
-				logger.Error.Printf("Failed to rebuild config for geo update: %v", err)
-				continue
-			}
-			newSrv, err := xray.Restart(*serverPtr, newConfig)
-			if err != nil {
-				logger.Error.Printf("Failed to restart Xray after geo update: %v", err)
-				continue
-			}
-			*serverPtr = newSrv
-		}
-	}
-}
-
 // setRuntimePaths configures asset and cache directories.
 func setRuntimePaths() {
 	// Determine if we are inside Docker
@@ -144,8 +96,8 @@ func setRuntimePaths() {
 
 	if inDocker {
 		// Use standard Docker paths
-		config.SetCacheDir("/etc/xray/cache")
-		updater.SetAssetDir("/usr/share/xray")
+		utils.SetCacheDir("/etc/xray/cache")
+		update.SetAssetDir("/usr/share/xray")
 		os.Setenv("XRAY_LOCATION_ASSET", "/usr/share/xray")
 	} else {
 		// Use paths relative to the executable
@@ -161,8 +113,8 @@ func setRuntimePaths() {
 		os.MkdirAll(assetDir, 0700)
 		os.MkdirAll(cacheDir, 0700)
 
-		config.SetCacheDir(cacheDir)
-		updater.SetAssetDir(assetDir)
+		utils.SetCacheDir(cacheDir)
+		update.SetAssetDir(assetDir)
 		os.Setenv("XRAY_LOCATION_ASSET", assetDir)
 	}
 }

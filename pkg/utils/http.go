@@ -1,4 +1,4 @@
-package fetcher
+package utils
 
 import (
 	"context"
@@ -8,10 +8,9 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+	"xray-docker/pkg/logger"
 
 	"golang.org/x/net/proxy"
-
-	"xray-balancer/pkg/logger"
 )
 
 // XrayRunning is set to true once Xray is successfully started.
@@ -36,7 +35,7 @@ func FetchHTTP(rawURL string, useProxy bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "xray-balancer/1.0")
+	req.Header.Set("User-Agent", "xray-docker/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

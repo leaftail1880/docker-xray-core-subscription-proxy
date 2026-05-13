@@ -6,14 +6,22 @@ import (
 	"strings"
 	"time"
 
-	"xray-balancer/pkg/logger"
+	"xray-docker/pkg/logger"
+	"xray-docker/pkg/xray/config"
 
 	xlog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/core"
+
+	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
-func Start(config *core.Config) (*core.Instance, error) {
-	server, err := core.New(config)
+// Re-export config functions for convenience
+var (
+	BuildConfig = config.Build
+)
+
+func Start(cfg *core.Config) (*core.Instance, error) {
+	server, err := core.New(cfg)
 	if err != nil {
 		return nil, err
 	}

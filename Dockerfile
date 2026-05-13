@@ -6,7 +6,7 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 COPY . .
 RUN go mod download
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /xray-balancer .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /xray-docker .
 
 # ---- Stage 2: Download Xray geo data files ----
 FROM alpine:latest AS assets
@@ -33,9 +33,9 @@ COPY --from=assets /geosite.dat /usr/share/xray/geosite.dat
 COPY --from=assets /geoip.dat /usr/share/xray/geoip.dat
 
 # Copy the Go binary
-COPY --from=builder /xray-balancer /usr/local/bin/xray-balancer
+COPY --from=builder /xray-docker /usr/local/bin/xray-docker
 
 VOLUME /etc/xray/cache
 EXPOSE 1080 8080
 
-ENTRYPOINT ["xray-balancer"]
+ENTRYPOINT ["xray-docker"]
