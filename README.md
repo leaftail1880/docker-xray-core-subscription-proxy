@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/github/license/leaftail1880/docker-xray-core-subscription-proxy?style=flat-square)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/leaftail1880/docker-xray-core-subscription-proxy?style=flat-square)](go.mod)
 
- Dockerized Xray-core client that turns your proxy subscription URL or vless:// link into a running SOCKS5, HTTP, and HTTPS proxy for other containers, with zero config. Just set your URLs and let it handle updates, health checks, and failover. Perfect as proxy for other containers.
+ Dockerized Xray-core client that turns your proxy subscription URL or vless:// link into a running SOCKS5, HTTP, and HTTPS proxy with zero config: it handles updates, health checks, and failover. Perfect as proxy for other containers.
 
 ## ✨ Features
 
