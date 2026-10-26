@@ -38,12 +38,12 @@ func buildRoutingAndObservatory(selector []string, strategy string) (map[string]
 		interval, err := time.ParseDuration(intervalStr)
 		if err != nil {
 			logger.Error.Printf("Invalid XRAY_OBSERVATORY_INTERVAL %q, using 5m", intervalStr)
-			interval = 5 * time.Minute
+			interval = 1 * time.Second
 		}
 		observatory = map[string]any{
 			"subjectSelector":   selector,
 			"probeInterval":     interval.String(),
-			"enableConcurrency": false,
+			"enableConcurrency": true,
 		}
 		logger.Info.Printf("Observatory enabled with probe interval %v", interval)
 	}
